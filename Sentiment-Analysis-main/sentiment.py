@@ -1,6 +1,7 @@
 import torch
 import time
 import argparse
+import logging
 import numpy as np
 import pandas as pd
 import torch.nn as nn
@@ -14,13 +15,20 @@ import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import Element
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', default='bert-base-uncased', type=str, help='bert model')
+parser.add_argument('--model', default='bert-base-multilingual-cased', type=str, help='bert model')
 parser.add_argument('--batch_size', default=16, type=int, help='batch size')
+parser.add_argument('--epochs', default=10, type=int, help='epochs')
 parser.add_argument('--reinit_layers', default=0, type=int, help='reinit layers')
+parser.add_argument('--weight_decay', default=False, type=bool, help='weight decay')
+parser.add_argument('--reinit_pooler', default=False, type=bool, help='weight decay')
 parser.add_argument('--lr', default=2e-5, type=float, help='learning rate')
+parser.add_argument('--pooling', default='cls', type=str, help='pooling layer type')
 args = parser.parse_args()
 
-
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(filename)s:%(lineno)d:%(message)s',
+                    datefmt='%m/%d/%Y %H:%M:%S',
+                    level=logging.INFO)
+logger = logging.getLogger(__name__)
 # tree = ET.parse('data/sample.positive - 副本.xml')
 # root = tree.getroot()
 # for child in root:
@@ -39,7 +47,7 @@ data_worse_en = pd.read_xml('data/en_sample_data/sample.negative.xml')
 data_worse_en['label'] = 0
 
 for i,sent in enumerate(data_worse_en.review.values):
-    if len(sent) > 1000:
+    if len(sent) > 2000:
         data_worse_en.drop([i],inplace = True)
 # data_bad = pd.read_csv('data/2.csv')
 # data_bad['label'] = 1
@@ -58,7 +66,7 @@ data_better_en = pd.read_xml('data/en_sample_data/sample.positive.xml')
 data_better_en['label'] = 1
 
 for i,sent in enumerate(data_better_en.review.values):
-    if len(sent) > 1000:
+    if len(sent) > 2000:
         data_better_en.drop([i],inplace = True)
 
 print(len(data_worse),len(data_better),len(data_worse_en),len(data_better_en))
@@ -77,8 +85,7 @@ print(MAX_LEN)
 X = data.review.values  # comment
 y = data.label.values  # label自己给的0 1 2
 
-X_train, X_test, y_train, y_test = \
-    train_test_split(X, y, test_size=0.1)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=True)
 # print(len(X), len(X_train))
 # 看一下测试集的comment 和 label
 # print(X_test)
@@ -188,7 +195,7 @@ batch_size = args.batch_size
 train_data = TensorDataset(train_inputs, train_masks, train_labels)
 train_sampler = RandomSampler(train_data)
 # print(len(train_data))
-train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=batch_size)
+train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=batch_size, drop_last=True)
 # print(train_dataloader)
 
 # 给验证集创建 DataLoader
@@ -252,35 +259,65 @@ class BertClassifier(nn.Module):
         """
         super(BertClassifier, self).__init__()
         # 输入维度(hidden size of Bert)默认768，分类器隐藏维度，输出维度(label)
-        D_in, H, D_out = 768, 50, 2
+        D_in, H, D_out = 768, 100, 2
 
         # 实体化Bert模型
         self.bert = BertModel.from_pretrained(args.model)
         # self.bert = BertModel.from_pretrained('bert-base-multilingual-cased')
         # self.bert = BertModel.from_pretrained('bert-base-chinese')
-
+        self.dense = nn.Linear(D_in * 2, D_in)
         # 实体化一个单层前馈分类器，说白了就是最后要输出的时候搞个全连接层
         self.classifier = nn.Sequential(
-            nn.Dropout(p=0.3),
-            nn.Linear(D_in,H),
-            nn.ReLU(),
-            nn.Linear(H, D_out)  # 全连接
+            nn.LayerNorm(D_in),
+            nn.Dropout(p=0.45), # dropot的概率可以再调调
+            nn.Linear(D_in,D_out),
+            # nn.ReLU(),
+            # nn.Linear(H, D_out)  # 全连接
         )
 
     def forward(self, input_ids, attention_mask):
         # 开始搭建整个网络了
         # 输入
-        # outputs = self.bert(input_ids=input_ids,
-        #                     attention_mask=attention_mask)
-        # # 为分类任务提取标记[CLS]的最后隐藏状态，因为要连接传到全连接层去
+        out = self.bert(input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            output_hidden_states=True)
+        # 为分类任务提取标记[CLS]的最后隐藏状态，因为要连接传到全连接层去
+        #print(outputs.shape)
         # last_hidden_state_cls = outputs[0][:, 0, :]
-        _, pooled_output = self.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            return_dict=False
-        )
+
+        if args.pooling == 'cls':
+            out = out.last_hidden_state[:, 0, :]  # [batch, 768]
+        elif args.pooling == 'pooler':
+            out = out.pooler_output  # [batch, 768]
+        elif args.pooling == 'last-avg':
+            last = out.last_hidden_state.transpose(1, 2)  # [batch, 768, seqlen]
+            out = torch.avg_pool1d(last, kernel_size=last.shape[-1]).squeeze(-1)  # [batch, 768]
+        elif args.pooling == 'first-last-avg':
+            first = out.hidden_states[1].transpose(1, 2)  # [batch, 768, seqlen]
+            last = out.hidden_states[-1].transpose(1, 2)  # [batch, 768, seqlen]
+            first_avg = torch.avg_pool1d(first, kernel_size=last.shape[-1]).squeeze(-1)  # [batch, 768]
+            last_avg = torch.avg_pool1d(last, kernel_size=last.shape[-1]).squeeze(-1)  # [batch, 768]
+            avg = torch.cat((first_avg.unsqueeze(1), last_avg.unsqueeze(1)), dim=1)  # [batch, 2, 768]
+            out = torch.avg_pool1d(avg.transpose(1, 2), kernel_size=2).squeeze(-1)  # [batch, 768]
+        elif args.pooling == 'mean-max-avg':
+            sequence_output = out.last_hidden_state
+            # # sequence_output的维度是[batch_size, seq_len, embed_dim]
+            avg_pooled = sequence_output.mean(1)
+            max_pooled = torch.max(sequence_output, dim=1)
+            pooled = torch.cat((avg_pooled, max_pooled[0]), dim=1)
+            out = self.dense(pooled)
+        # print(last_hidden_state_cls.shape)
+        # print(outputs[1].shape)
+        # print(last_hidden_state_cls==outputs[1])
+        # _, pooled_output = self.bert(
+        #     input_ids=input_ids,
+        #     attention_mask=attention_mask,
+        #     return_dict = True
+        # )
+        # print(pooled_output.shape)
+        # print(last_hidden_state_cls==pooled_output)
         # 全连接，计算，输出label
-        logits = self.classifier(pooled_output)
+        logits = self.classifier(out)
 
         return logits
 
@@ -301,15 +338,22 @@ def initialize_model(epochs=2):
     bert_classifier = BertClassifier()
     # 用GPU运算
     bert_classifier.to(device)
-    # 创建优化器
-    optimizer = AdamW(bert_classifier.parameters(),
-                      lr=args.lr,  # 默认学习率
-                      eps=1e-8,  # 默认精度
-                      correct_bias=True,
-                      weight_decay=0.01
-                      )
     # 训练的总步数
     total_steps = len(train_dataloader) * epochs
+    # 创建优化器
+    if args.weight_decay:
+        optimizer = AdamW(bert_classifier.parameters(),
+                          lr=args.lr,  # 默认学习率
+                          eps=1e-8,  # 默认精度
+                          correct_bias=True,
+                          weight_decay=0.01
+                          )
+    else:
+        optimizer = AdamW(bert_classifier.parameters(),
+                          lr=args.lr,  # 默认学习率
+                          eps=1e-8,  # 默认精度
+                          correct_bias=True,
+                          )
     # 学习率预热
     #lambda1 = lambda epoch: 0.65 ** epoch
     # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda1)
@@ -319,7 +363,7 @@ def initialize_model(epochs=2):
     scheduler = transformers.optimization.get_polynomial_decay_schedule_with_warmup(optimizer,
                                                                         num_warmup_steps=0,
                                                                         num_training_steps=total_steps,
-                                                                        power=2.7)
+                                                                        power=3)
     return bert_classifier, optimizer, scheduler
 
 
@@ -331,7 +375,31 @@ loss_fn = nn.CrossEntropyLoss()  # 交叉熵
 def train(model, train_dataloader, test_dataloader=None, epochs=2, evaluation=False):
     # 开始训练循环
     # print(len(train_dataloader))
+
+    # reinit pooler-layer
+    if args.reinit_pooler:
+        logger.info(f"reinit pooler layer of {args.model}")
+        encoder_temp = model.bert
+        encoder_temp.pooler.dense.weight.data.normal_(mean=0.0, std=encoder_temp.config.initializer_range)
+        encoder_temp.pooler.dense.bias.data.zero_()
+        for p in encoder_temp.pooler.parameters():
+            p.requires_grad = True
+
     # reinit encoder layers
+    if args.reinit_layers > 0:
+        # assert config.reinit_pooler
+        logger.info(f"reinit  layers count of {str(args.reinit_layers)}")
+
+        encoder_temp = model.bert
+        for layer in encoder_temp.encoder.layer[-args.reinit_layers:]:
+            for module in layer.modules():
+                if isinstance(module, (nn.Linear, nn.Embedding)):
+                    module.weight.data.normal_(mean=0.0, std=encoder_temp.config.initializer_range)
+                elif isinstance(module, nn.LayerNorm):
+                    module.bias.data.zero_()
+                    module.weight.data.fill_(1.0)
+                if isinstance(module, nn.Linear) and module.bias is not None:
+                    module.bias.data.zero_()
 
     for epoch_i in range(epochs):
         # if epoch_i <4:
@@ -465,11 +533,24 @@ def evaluate(model, test_dataloader):
 
 # 先来个两轮
 
-bert_classifier, optimizer, scheduler = initialize_model(epochs=10)
+bert_classifier, optimizer, scheduler = initialize_model(epochs=args.epochs)
 # print("Start training and validation:\n")
 print("Start training and testing:\n")
-train(bert_classifier, train_dataloader, test_dataloader, epochs=10, evaluation=True)  # 这个是有评估的
+train(bert_classifier, train_dataloader, test_dataloader, epochs=args.epochs, evaluation=True)  # 这个是有评估的
 
 net = BertClassifier()
 print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for x in net.parameters())))
 
+# CUDA_VISIBLE_DEVICES=0 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 power 2.7
+
+# CUDA_VISIBLE_DEVICES=0 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 --epochs 5
+# 85.1%
+
+# CUDA_VISIBLE_DEVICES=1 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 --epochs 5
+# 85.46
+
+#CUDA_VISIBLE_DEVICES=1 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 20 --lr 1e-5 --weight_decay True --reinit_layers 2 --epochs 10 --pooling 'last-avg'
+# 85.89
+
+# CUDA_VISIBLE_DEVICES=1 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 20 --lr 1e-5 --weight_decay True --reinit_layers 4 --epochs 10 --pooling 'last-avg'
+# 86.31
