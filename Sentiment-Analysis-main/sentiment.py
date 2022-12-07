@@ -38,17 +38,17 @@ data_worse = pd.read_xml('data/sample.negative.xml')
 # print(data_worse)
 data_worse['label'] = 0
 
-for i,sent in enumerate(data_worse.review.values):
-    if len(sent) > 100:
-        data_worse.drop([i],inplace = True)
+# for i,sent in enumerate(data_worse.review.values):
+#     if len(sent) > 100:
+#         data_worse.drop([i],inplace = True)
 
 data_worse_en = pd.read_xml('data/en_sample_data/sample.negative.xml')
 # print(data_worse)
 data_worse_en['label'] = 0
 
-for i,sent in enumerate(data_worse_en.review.values):
-    if len(sent) > 2000:
-        data_worse_en.drop([i],inplace = True)
+# for i,sent in enumerate(data_worse_en.review.values):
+#     if len(sent) > 2000:
+#         data_worse_en.drop([i],inplace = True)
 # data_bad = pd.read_csv('data/2.csv')
 # data_bad['label'] = 1
 # data_normal = pd.read_csv('data/3.csv')
@@ -58,21 +58,31 @@ for i,sent in enumerate(data_worse_en.review.values):
 data_better = pd.read_xml('data/sample.positive.xml')
 data_better['label'] = 1
 
-for i,sent in enumerate(data_better.review.values):
-    if len(sent) > 100:
-        data_better.drop([i],inplace = True)
+# for i,sent in enumerate(data_better.review.values):
+#     if len(sent) > 100:
+#         data_better.drop([i],inplace = True)
 
 data_better_en = pd.read_xml('data/en_sample_data/sample.positive.xml')
 data_better_en['label'] = 1
 
-for i,sent in enumerate(data_better_en.review.values):
-    if len(sent) > 2000:
-        data_better_en.drop([i],inplace = True)
+# for i,sent in enumerate(data_better_en.review.values):
+#     if len(sent) > 2000:
+#         data_better_en.drop([i],inplace = True)
 
 print(len(data_worse),len(data_better),len(data_worse_en),len(data_better_en))
 # 连接每个数据集作为训练集
 # data = pd.concat([data_worse[:1000], data_bad[:1000], data_normal[:1000], data_good[:1000], data_better[:1000]], axis=0).reset_index(drop=True)
 data = pd.concat([data_worse[:-1],data_worse_en[:-1], data_better[:-1], data_better_en[:-1]], axis=0).reset_index(drop=True)
+
+for i,sent in enumerate(data.review.values):
+    data.loc[i,'review'] = data.loc[i,'review'].replace('\n', ' ')
+
+for i,sent in enumerate(data.review.values):
+    if len(sent) > 1870:
+        data.drop([i],inplace = True)
+
+
+    # if i>5000 and i<5050: print(data.loc[i].review)
 MAX_LEN = max([len(sent) for sent in data.review.values])
 print(MAX_LEN)
 # print(data.size)
@@ -268,10 +278,10 @@ class BertClassifier(nn.Module):
         self.dense = nn.Linear(D_in * 2, D_in)
         # 实体化一个单层前馈分类器，说白了就是最后要输出的时候搞个全连接层
         self.classifier = nn.Sequential(
-            nn.LayerNorm(D_in),
-            nn.Dropout(p=0.45), # dropot的概率可以再调调
+            # nn.LayerNorm(D_in),
+            nn.Dropout(p=0.5), # dropot的概率可以再调调
             nn.Linear(D_in,D_out),
-            # nn.ReLU(),
+            # nn.Sigmoid()
             # nn.Linear(H, D_out)  # 全连接
         )
 
@@ -300,7 +310,7 @@ class BertClassifier(nn.Module):
             avg = torch.cat((first_avg.unsqueeze(1), last_avg.unsqueeze(1)), dim=1)  # [batch, 2, 768]
             out = torch.avg_pool1d(avg.transpose(1, 2), kernel_size=2).squeeze(-1)  # [batch, 768]
         elif args.pooling == 'mean-max-avg':
-            sequence_output = out.last_hidden_state
+            sequence_output = out.hidden_states[-1]
             # # sequence_output的维度是[batch_size, seq_len, embed_dim]
             avg_pooled = sequence_output.mean(1)
             max_pooled = torch.max(sequence_output, dim=1)
