@@ -34,9 +34,6 @@ args = parser.parse_args()
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(filename)s:%(lineno)d:%(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
-logger = logging.getLogger(__name__)logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(filename)s:%(lineno)d:%(message)s',
-                    datefmt='%m/%d/%Y %H:%M:%S',
-                    level=logging.INFO)
 logger = logging.getLogger(__name__)
 # tree = ET.parse('data/sample.positive - 副本.xml')
 # root = tree.getroot()
@@ -503,7 +500,7 @@ class Test():
 
     def test(self):
         data = self.data.copy()
-        encoded_data = [tokenizer.encode(sent, add_special_tokens=True, truncation=True, max_length=512) for sent in data[column_label].values]
+        encoded_data = [tokenizer.encode(sent, add_special_tokens=True, truncation=True, max_length=512) for sent in data[self.column_label].values]
         MAX_LEN = max([len(sent) for sent in encoded_data])
 
         input_ids = []
