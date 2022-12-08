@@ -2,12 +2,11 @@ import torch
 import time
 import argparse
 import logging
-import logging
 import numpy as np
 import pandas as pd
 import torch.nn as nn
 import transformers.optimization
-from transformers import BertModel,BertForSequenceClassification
+from transformers import BertModel
 from transformers import BertTokenizer
 from sklearn.model_selection import train_test_split
 from transformers import AdamW, get_linear_schedule_with_warmup
@@ -16,19 +15,16 @@ import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import Element
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', default='bert-base-mmultililtilingual-gual-cased', type=str, help='bert model')
-parser.add_argument('--batch_size', default=16, type=int, help='batch size')
+parser.add_argument('--model', default='bert-base-multilingual-cased', type=str, help='bert model')
+parser.add_argument('--batch_size', default=24, type=int, help='batch size')
+parser.add_argument('--dropout', default=0.47, type=float, help='dropout probability')
 parser.add_argument('--epochs', default=10, type=int, help='epochs')
-parser.add_argument('--epochs', default=10, type=int, help='epochs')
-parser.add_argument('--reinit_layers', default=0, type=int, help='reinit layers')
-parser.add_argument('--weight_decay', default=False, type=bool, help='weight decay')
-parser.add_argument('--reinit_pooler', default=False, type=bool, help='weight decay')
-parser.add_argument('--weight_decay', default=False, type=bool, help='weight decay')
-parser.add_argument('--reinit_pooler', default=False, type=bool, help='weight decay')
-parser.add_argument('--lr', default=2e-5, type=float, help='learning rate')
-parser.add_argument('--pooling', default='cls', type=str, help='pooling layer type')
-parser.add_argument('--pooling', default='cls', type=str, help='pooling layer type')
-parser.add_argument('--name', default='./model.pth', type=str, help='name of the model to be saved')
+parser.add_argument('--reinit_layers', default=4, type=int, help='reinit layers')
+parser.add_argument('--weight_decay', default=True, type=bool, help='weight decay')
+parser.add_argument('--reinit_pooler', default=False, type=bool, help='reinit_pooler')
+parser.add_argument('--lr', default=1e-5, type=float, help='learning rate')
+parser.add_argument('--pooling', default='last-avg', type=str, help='pooling layer type')
+parser.add_argument('--activation', default='relu', type=str, help='activation layer type')
 args = parser.parse_args()
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(filename)s:%(lineno)d:%(message)s',
@@ -41,19 +37,43 @@ logger = logging.getLogger(__name__)
 #     print(child.text)
    #  print(child.tag)
 data_worse = pd.read_xml('data/sample.negative.xml')
+# print(data_worse)
 data_worse['label'] = 0
 
+# for i,sent in enumerate(data_worse.review.values):
+#     if len(sent) > 100:
+#         data_worse.drop([i],inplace = True)
+
 data_worse_en = pd.read_xml('data/en_sample_data/sample.negative.xml')
+# print(data_worse)
 data_worse_en['label'] = 0
 
+# for i,sent in enumerate(data_worse_en.review.values):
+#     if len(sent) > 2000:
+#         data_worse_en.drop([i],inplace = True)
+# data_bad = pd.read_csv('data/2.csv')
+# data_bad['label'] = 1
+# data_normal = pd.read_csv('data/3.csv')
+# data_normal['label'] = 2
+# data_good = pd.read_csv('data/4.csv')
+# data_good['label'] = 3
 data_better = pd.read_xml('data/sample.positive.xml')
 data_better['label'] = 1
+
+# for i,sent in enumerate(data_better.review.values):
+#     if len(sent) > 100:
+#         data_better.drop([i],inplace = True)
 
 data_better_en = pd.read_xml('data/en_sample_data/sample.positive.xml')
 data_better_en['label'] = 1
 
+# for i,sent in enumerate(data_better_en.review.values):
+#     if len(sent) > 2000:
+#         data_better_en.drop([i],inplace = True)
+
 print(len(data_worse),len(data_better),len(data_worse_en),len(data_better_en))
 # 连接每个数据集作为训练集
+# data = pd.concat([data_worse[:1000], data_bad[:1000], data_normal[:1000], data_good[:1000], data_better[:1000]], axis=0).reset_index(drop=True)
 data = pd.concat([data_worse[:-1],data_worse_en[:-1], data_better[:-1], data_better_en[:-1]], axis=0).reset_index(drop=True)
 
 for i,sent in enumerate(data.review.values):
@@ -63,17 +83,21 @@ for i,sent in enumerate(data.review.values):
     if len(sent) > 1870:
         data.drop([i],inplace = True)
 
+
+    # if i>5000 and i<5050: print(data.loc[i].review)
 MAX_LEN = max([len(sent) for sent in data.review.values])
-print("unencode max length:",MAX_LEN)
+print(MAX_LEN)
+# print(data.size)
+
 
 """
 将随机将整个训练数据分为两组：一组包含90%的数据当作训练集和一组包含10%的数据当作测试集。
 也就是9000-1000
 """
 X = data.review.values  # comment
-y = data.label.values  # label:0 1
+y = data.label.values  # label自己给的0 1 2
 
-X_train, X_validate, y_train, y_validate = train_test_split(X, y, test_size=0.2, shuffle=True)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, shuffle=True)
 # print(len(X), len(X_train))
 # 看一下测试集的comment 和 label
 # print(X_test)
@@ -150,16 +174,20 @@ def preprocessing_for_bert(data):
 # Encode 我们连接的数据
 encoded_comment = [tokenizer.encode(sent, add_special_tokens=True, truncation=True, max_length=512) for sent in data.review.values]
 
+# 找到最大长度
+# max_len = max([len(sent) for sent in encoded_comment])
+# print('Max length: ', max_len)  68
+
 """
 现在我们开始tokenize数据
 """
 # 文本最大长度
 MAX_LEN = max([len(sent) for sent in encoded_comment])
-print("encode max length:",MAX_LEN)
+print(MAX_LEN)
 # MAX_LEN = 40
 # 在train，test上运行 preprocessing_for_bert 转化为指定输入格式
 train_inputs, train_masks = preprocessing_for_bert(X_train)
-validate_inputs, validate_masks = preprocessing_for_bert(X_validate)
+test_inputs, test_masks = preprocessing_for_bert(X_test)
 
 """Create PyTorch DataLoader
 
@@ -169,7 +197,7 @@ validate_inputs, validate_masks = preprocessing_for_bert(X_validate)
 # 转化为tensor类型
 
 train_labels = torch.tensor(y_train)
-validate_labels = torch.tensor(y_validate)
+test_labels = torch.tensor(y_test)
 
 
 # 用于BERT微调, batch size 16 or 32较好.
@@ -178,13 +206,14 @@ batch_size = args.batch_size
 # 给训练集创建 DataLoader
 train_data = TensorDataset(train_inputs, train_masks, train_labels)
 train_sampler = RandomSampler(train_data)
+# print(len(train_data))
 train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=batch_size, drop_last=True)
-
+# print(train_dataloader)
 
 # 给验证集创建 DataLoader
-validate_data = TensorDataset(validate_inputs, validate_masks, validate_labels)
-validate_sampler = SequentialSampler(validate_data)
-validate_dataloader = DataLoader(validate_data, sampler=validate_sampler, batch_size=batch_size)
+test_data = TensorDataset(test_inputs, test_masks, test_labels)
+test_sampler = SequentialSampler(test_data)
+test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=batch_size)
 
 
 """关键点来了，开始训练！
@@ -199,6 +228,42 @@ BERT base由12个transformer层组成，每个transformer层接收一系列token
 注意文本是512的限制，所以不能太大，我就是通过筛选排列得到的数据集
 """
 
+
+# 自己定义的Bert分类器的类，微调Bert模型
+# class BertClassifier(nn.Module):
+#     def __init__(self, ):
+#         """
+#         freeze_bert (bool): 设置是否进行微调，0就是不，1就是调
+#         """
+#         super(BertClassifier, self).__init__()
+#         # 输入维度(hidden size of Bert)默认768，分类器隐藏维度，输出维度(label)
+#         D_in, H, D_out = 768, 100, 2
+#
+#         # 实体化Bert模型
+#         self.bert = BertModel.from_pretrained(args.model)
+#         # self.bert = BertModel.from_pretrained('bert-base-multilingual-cased')
+#         # self.bert = BertModel.from_pretrained('bert-base-chinese')
+#
+#         # 实体化一个单层前馈分类器，说白了就是最后要输出的时候搞个全连接层
+#         self.classifier = nn.Sequential(
+#             nn.Linear(D_in, H),  # 全连接
+#             nn.ReLU(),  # 激活函数
+#             nn.Dropout(p=0.3),
+#             nn.Linear(H, D_out)  # 全连接
+#         )
+#
+#     def forward(self, input_ids, attention_mask):
+#         # 开始搭建整个网络了
+#         # 输入
+#         outputs = self.bert(input_ids=input_ids,
+#                             attention_mask=attention_mask)
+#         # 为分类任务提取标记[CLS]的最后隐藏状态，因为要连接传到全连接层去
+#         last_hidden_state_cls = outputs[0][:, 0, :]
+#         # 全连接，计算，输出label
+#         logits = self.classifier(last_hidden_state_cls)
+#
+#         return logits
+
 class BertClassifier(nn.Module):
     def __init__(self, ):
         """
@@ -206,7 +271,7 @@ class BertClassifier(nn.Module):
         """
         super(BertClassifier, self).__init__()
         # 输入维度(hidden size of Bert)默认768，分类器隐藏维度，输出维度(label)
-        D_in, H, D_out = 768, 100, 2
+        D_in, H, D_out = 768, 300, 2
 
         # 实体化Bert模型
         self.bert = BertModel.from_pretrained(args.model)
@@ -214,12 +279,17 @@ class BertClassifier(nn.Module):
         # self.bert = BertModel.from_pretrained('bert-base-chinese')
         self.dense = nn.Linear(D_in * 2, D_in)
         # 实体化一个单层前馈分类器，说白了就是最后要输出的时候搞个全连接层
+        self.activation = None
+        if args.activation == 'relu': self.activation = nn.ReLU()
+        if args.activation == 'sigmoid': self.activation = nn.Sigmoid()
+        if args.activation == 'elu': self.activation = nn.ELU()
         self.classifier = nn.Sequential(
-            # nn.LayerNorm(D_in),
-            nn.Dropout(p=0.5), # dropot的概率可以再调调
+            nn.Dropout(p=args.dropout),  # dropot的概率可以再调调
+            nn.LayerNorm(D_in), # dropout 和 Layernorm顺序需要再确定
             nn.Linear(D_in,D_out),
-            # nn.Sigmoid()
-            # nn.Linear(H, D_out)  # 全连接
+            self.activation,
+            # nn.Linear(H, D_out),  # 全连接
+            # self.activation
         )
 
     def forward(self, input_ids, attention_mask):
@@ -319,7 +389,7 @@ loss_fn = nn.CrossEntropyLoss()  # 交叉熵
 
 
 # 训练模型
-def train(model, train_dataloader, validate_dataloader=None, epochs=2, evaluation=False):
+def train(model, train_dataloader, test_dataloader=None, epochs=2, evaluation=False):
     # 开始训练循环
     # print(len(train_dataloader))
 
@@ -348,7 +418,6 @@ def train(model, train_dataloader, validate_dataloader=None, epochs=2, evaluatio
                 if isinstance(module, nn.Linear) and module.bias is not None:
                     module.bias.data.zero_()
 
-    best_accuracy = 0
     for epoch_i in range(epochs):
         # if epoch_i <4:
         #     optimizer = AdamW(bert_classifier.parameters(),
@@ -422,27 +491,18 @@ def train(model, train_dataloader, validate_dataloader=None, epochs=2, evaluatio
         avg_train_loss = total_loss / len(train_dataloader)
 
         print("-" * 80)
-
-        
         # =======================================
         #               Evaluation
         # =======================================
-        
         if evaluation:  # 这个evalution是我们自己给的，用来判断是否需要我们汇总评估
             # 每个epoch之后评估一下性能
             # 在我们的验证集/测试集上.
-            validate_loss, validate_accuracy = evaluate(model, validate_dataloader)
-
-            # 保存当前性能最好的模型
-            if validate_accuracy > best_accuracy:
-                best_accuracy = validate_accuracy
-                torch.save(model,args.name)
-
+            test_loss, test_accuracy = evaluate(model, test_dataloader)
             # Print 整个训练集的耗时
             time_elapsed = time.time() - t0_epoch
 
             print(
-                f"{epoch_i + 1:^7} | {'-':^10} | {avg_train_loss:^14.6f} | {validate_loss:^12.6f} | {validate_accuracy:^12.2f}% | {time_elapsed:^9.2f}")
+                f"{epoch_i + 1:^7} | {'-':^10} | {avg_train_loss:^14.6f} | {test_loss:^12.6f} | {test_accuracy:^12.2f}% | {time_elapsed:^9.2f}")
             print("-" * 80)
         print("\n")
 
@@ -488,113 +548,16 @@ def evaluate(model, test_dataloader):
     return val_loss, val_accuracy
 
 
-class Test():
-    def __init__(self,model_path,input_file,output_file) -> None:
-        self.model = torch.load(model_path)
-        self.input_file = input_file
-        self.output_file = output_file
-        self.data = pd.read_xml(self.input_file)
-        self.root_label = 'weibos'
-        self.column_label = data.columns[1]
-        self.data_length = len(self.data[self.column_label])
-
-    def test(self):
-        data = self.data.copy()
-        encoded_data = [tokenizer.encode(sent, add_special_tokens=True, truncation=True, max_length=512) for sent in data[self.column_label].values]
-        MAX_LEN = max([len(sent) for sent in encoded_data])
-
-        input_ids = []
-        attention_masks = []
-        for sent in data:
-            encoded_sent = tokenizer.encode_plus(
-                text=sent,  # 预处理语句
-                add_special_tokens=True,  # 加 [CLS] 和 [SEP]
-                truncation= True,
-                max_length=MAX_LEN,  # 截断或者填充的最大长度
-                padding='max_length',  # 填充为最大长度，这里的padding在之间可以直接用pad_to_max但是版本更新之后弃用了，老版本什么都没有，可以尝试用extend方法
-                return_attention_mask=True  # 返回 attention mask
-            )
-            # 把输出加到列表里面
-            input_ids.append(encoded_sent.get('input_ids'))
-            attention_masks.append(encoded_sent.get('attention_mask'))        
-
-        input_ids = torch.tensor(input_ids)
-        attention_masks = torch.tensor(attention_masks)
-
-        test_data = TensorDataset(input_ids, attention_masks)
-        test_sampler = SequentialSampler(test_data)
-        test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=batch_size)
-
-        predicts = []
-        for batch in test_dataloader:
-            b_input_ids,b_attn_mask = tuple(t.to(device) for t in batch)
-
-            with torch.no_grad():
-                logits = self.model(b_input_ids, b_attn_mask)
-            preds = (torch.argmax(logits, dim=1).flatten()).cpu().tolist()
-            predicts+=preds
-
-        predicts = predicts[:self.data_length]
-
-        return self.generate_output_file(predicts)
-
-    def generate_output_file(self,predicts):
-        assert len(predicts) == self.data_length
-
-        root = ET.Element(self.root_label)
-        tree = ET.ElementTree(root)
-        for row in data.index:
-            entry = ET.Element(self.column_label)
-            entry.set('polarity',str(predicts[row]))
-            entry.set('id', str(row+1))
-            entry.text = str(data[self.column_label][row])
-            root.append(entry)
-
-        self.__indent(root)
-        tree.write(self.output_file, encoding='utf-8', xml_declaration=True)        
-
-
-    def __indent(self,elem, level=0):
-        i = "\n" + level*"\t"
-        if len(elem):
-            if not elem.text or not elem.text.strip():
-                elem.text = i + "\t"
-            if not elem.tail or not elem.tail.strip():
-                elem.tail = i
-            for elem in elem:
-                self.__indent(elem, level+1)
-            if not elem.tail or not elem.tail.strip():
-                elem.tail = i
-        else:
-            if level and (not elem.tail or not elem.tail.strip()):
-                elem.tail = i
-
-
-# 先来个两轮
+for k,v in sorted(vars(args).items()):
+    print(k,'=',v)
 
 bert_classifier, optimizer, scheduler = initialize_model(epochs=args.epochs)
-print("Start training and validation:\n")
-train(bert_classifier, train_dataloader, validate_dataloader, epochs=args.epochs, evaluation=True)  # 这个是有评估的
+# print("Start training and validation:\n")
+print("Start training and testing:\n")
+train(bert_classifier, train_dataloader, test_dataloader, epochs=args.epochs, evaluation=True)  # 这个是有评估的
 
 net = BertClassifier()
 print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for x in net.parameters())))
-
-# CUDA_VISIBLE_DEVICES=0 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 power 2.7
-
-# CUDA_VISIBLE_DEVICES=0 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 --epochs 5
-# 85.1%
-
-# CUDA_VISIBLE_DEVICES=1 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 --epochs 5
-# 85.46
-
-#CUDA_VISIBLE_DEVICES=1 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 20 --lr 1e-5 --weight_decay True --reinit_layers 2 --epochs 10 --pooling 'last-avg'
-# 85.89
-
-# Do testing on test dataset and generates a xml-formatted output file 
-# test = Test(model_path='./model.pth',input_file='input_file',output_file='output_file')
-# test.test()
-
-
 
 # CUDA_VISIBLE_DEVICES=0 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 power 2.7
 
