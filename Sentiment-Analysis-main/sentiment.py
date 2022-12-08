@@ -2,6 +2,7 @@ import torch
 import time
 import argparse
 import logging
+import logging
 import numpy as np
 import pandas as pd
 import torch.nn as nn
@@ -15,18 +16,25 @@ import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import Element
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', default='bert-base-multilingual-cased', type=str, help='bert model')
+parser.add_argument('--model', default='bert-base-mmultililtilingual-gual-cased', type=str, help='bert model')
 parser.add_argument('--batch_size', default=16, type=int, help='batch size')
+parser.add_argument('--epochs', default=10, type=int, help='epochs')
 parser.add_argument('--epochs', default=10, type=int, help='epochs')
 parser.add_argument('--reinit_layers', default=0, type=int, help='reinit layers')
 parser.add_argument('--weight_decay', default=False, type=bool, help='weight decay')
 parser.add_argument('--reinit_pooler', default=False, type=bool, help='weight decay')
+parser.add_argument('--weight_decay', default=False, type=bool, help='weight decay')
+parser.add_argument('--reinit_pooler', default=False, type=bool, help='weight decay')
 parser.add_argument('--lr', default=2e-5, type=float, help='learning rate')
+parser.add_argument('--pooling', default='cls', type=str, help='pooling layer type')
 parser.add_argument('--pooling', default='cls', type=str, help='pooling layer type')
 parser.add_argument('--name', default='./model.pth', type=str, help='name of the model to be saved')
 args = parser.parse_args()
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(filename)s:%(lineno)d:%(message)s',
+                    datefmt='%m/%d/%Y %H:%M:%S',
+                    level=logging.INFO)
+logger = logging.getLogger(__name__)logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(filename)s:%(lineno)d:%(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -574,6 +582,16 @@ train(bert_classifier, train_dataloader, validate_dataloader, epochs=args.epochs
 net = BertClassifier()
 print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for x in net.parameters())))
 
+# CUDA_VISIBLE_DEVICES=0 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 power 2.7
+
+# CUDA_VISIBLE_DEVICES=0 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 --epochs 5
+# 85.1%
+
+# CUDA_VISIBLE_DEVICES=1 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 --epochs 5
+# 85.46
+
+#CUDA_VISIBLE_DEVICES=1 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 20 --lr 1e-5 --weight_decay True --reinit_layers 2 --epochs 10 --pooling 'last-avg'
+# 85.89
 
 # Do testing on test dataset and generates a xml-formatted output file 
 # test = Test(model_path='./model.pth',input_file='input_file',output_file='output_file')
