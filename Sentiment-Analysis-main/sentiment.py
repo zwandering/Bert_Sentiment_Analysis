@@ -13,6 +13,7 @@ from transformers import AdamW, get_linear_schedule_with_warmup
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import Element
+import sys
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='bert-base-multilingual-cased', type=str, help='bert model')
@@ -25,17 +26,20 @@ parser.add_argument('--reinit_pooler', default=False, type=bool, help='reinit_po
 parser.add_argument('--lr', default=1e-5, type=float, help='learning rate')
 parser.add_argument('--pooling', default='last-avg', type=str, help='pooling layer type')
 parser.add_argument('--activation', default='relu', type=str, help='activation layer type')
+parser.add_argument('--name', default='./model.pth', type=str, help='name of the model to be saved')
+parser.add_argument('--output', default='./output.txt', type=str, help='the file that stdout be redirected to')
 args = parser.parse_args()
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(filename)s:%(lineno)d:%(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
-# tree = ET.parse('data/sample.positive - 副本.xml')
-# root = tree.getroot()
-# for child in root:
-#     print(child.text)
-   #  print(child.tag)
+
+savedStdout = sys.stdout
+f = open(args.output,'w+')
+sys.stdout = f
+
+
 data_worse = pd.read_xml('data/sample.negative.xml')
 # print(data_worse)
 data_worse['label'] = 0
@@ -391,7 +395,6 @@ loss_fn = nn.CrossEntropyLoss()  # 交叉熵
 # 训练模型
 def train(model, train_dataloader, test_dataloader=None, epochs=2, evaluation=False):
     # 开始训练循环
-    # print(len(train_dataloader))
 
     # reinit pooler-layer
     if args.reinit_pooler:
@@ -497,7 +500,14 @@ def train(model, train_dataloader, test_dataloader=None, epochs=2, evaluation=Fa
         if evaluation:  # 这个evalution是我们自己给的，用来判断是否需要我们汇总评估
             # 每个epoch之后评估一下性能
             # 在我们的验证集/测试集上.
-            test_loss, test_accuracy = evaluate(model, test_dataloader)
+            validate_loss, validate_accuracy = evaluate(model, validate_dataloader)
+
+            # 保存当前性能最好的模型
+            if validate_accuracy > best_accuracy:
+                best_accuracy = validate_accuracy
+                torch.save(model,args.name)
+                print("Model Saved as :"+model,args.name)
+
             # Print 整个训练集的耗时
             time_elapsed = time.time() - t0_epoch
 
@@ -558,6 +568,16 @@ train(bert_classifier, train_dataloader, test_dataloader, epochs=args.epochs, ev
 
 net = BertClassifier()
 print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for x in net.parameters())))
+
+
+# Do testing on test dataset and generates a xml-formatted output file 
+# test = Test(model_path='./model.pth',input_file='input_file',output_file='output_file')
+# test.test()
+
+
+f.close()
+sys.stdout = savedStdout
+
 
 # CUDA_VISIBLE_DEVICES=0 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 power 2.7
 
