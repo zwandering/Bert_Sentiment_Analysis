@@ -1,4 +1,5 @@
 import torch
+import os
 import time
 import argparse
 import logging
@@ -26,7 +27,7 @@ parser.add_argument('--reinit_pooler', default=False, type=bool, help='reinit_po
 parser.add_argument('--lr', default=1e-5, type=float, help='learning rate')
 parser.add_argument('--pooling', default='last-avg', type=str, help='pooling layer type')
 parser.add_argument('--activation', default='relu', type=str, help='activation layer type')
-parser.add_argument('--name', default='./model.pth', type=str, help='name of the model to be saved')
+parser.add_argument('--out_dir', default='./model', type=str, help='output direction of the model to be saved')
 parser.add_argument('--output', default='./output.txt', type=str, help='the file that stdout be redirected to')
 args = parser.parse_args()
 
@@ -35,9 +36,9 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(filename)
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-savedStdout = sys.stdout
-f = open(args.output,'w+')
-sys.stdout = f
+# savedStdout = sys.stdout
+# f = open(args.output,'w+')
+# sys.stdout = f
 
 
 data_worse = pd.read_xml('data/sample.negative.xml')
@@ -384,7 +385,7 @@ def initialize_model(epochs=2):
     scheduler = transformers.optimization.get_polynomial_decay_schedule_with_warmup(optimizer,
                                                                         num_warmup_steps=0,
                                                                         num_training_steps=total_steps,
-                                                                        power=3)
+                                                                        power=4) # 12.9 0:35 power 3->4
     return bert_classifier, optimizer, scheduler
 
 
@@ -420,7 +421,7 @@ def train(model, train_dataloader, test_dataloader=None, epochs=2, evaluation=Fa
                     module.weight.data.fill_(1.0)
                 if isinstance(module, nn.Linear) and module.bias is not None:
                     module.bias.data.zero_()
-
+    best_accuracy = 0.
     for epoch_i in range(epochs):
         # if epoch_i <4:
         #     optimizer = AdamW(bert_classifier.parameters(),
@@ -500,19 +501,24 @@ def train(model, train_dataloader, test_dataloader=None, epochs=2, evaluation=Fa
         if evaluation:  # 这个evalution是我们自己给的，用来判断是否需要我们汇总评估
             # 每个epoch之后评估一下性能
             # 在我们的验证集/测试集上.
-            validate_loss, validate_accuracy = evaluate(model, validate_dataloader)
+            validate_loss, validate_accuracy = evaluate(model, test_dataloader)
 
             # 保存当前性能最好的模型
             if validate_accuracy > best_accuracy:
                 best_accuracy = validate_accuracy
-                torch.save(model,args.name)
-                print("Model Saved as :"+model,args.name)
+                output_dir = os.path.join(args.out_dir,args.model,str(args.pooling))
+                if not os.path.exists(output_dir):
+                    os.makedirs(output_dir)
+                output_name = 'AUC'+str(validate_accuracy)+'_lr_' + str(args.lr) + '_pooling_' + str(args.pooling) + '_batch_' + str(args.batch_size)+'.pth'
+                output_path = os.path.join(output_dir, output_name)
+                torch.save(model, output_path)
+                print("Model Saved as :"+output_path)
 
             # Print 整个训练集的耗时
             time_elapsed = time.time() - t0_epoch
 
             print(
-                f"{epoch_i + 1:^7} | {'-':^10} | {avg_train_loss:^14.6f} | {test_loss:^12.6f} | {test_accuracy:^12.2f}% | {time_elapsed:^9.2f}")
+                f"{epoch_i + 1:^7} | {'-':^10} | {avg_train_loss:^14.6f} | {validate_loss:^12.6f} | {validate_accuracy:^12.2f}% | {time_elapsed:^9.2f}")
             print("-" * 80)
         print("\n")
 
@@ -570,7 +576,7 @@ net = BertClassifier()
 print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for x in net.parameters())))
 
 
-# Do testing on test dataset and generates a xml-formatted output file 
+# Do testing on test dataset and generates a xml-formatted output file
 # test = Test(model_path='./model.pth',input_file='input_file',output_file='output_file')
 # test.test()
 
