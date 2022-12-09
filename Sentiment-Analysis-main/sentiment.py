@@ -567,6 +567,88 @@ def evaluate(model, test_dataloader):
 for k,v in sorted(vars(args).items()):
     print(k,'=',v)
 
+class Test():
+    def __init__(self,model_path,input_file,output_file) -> None:
+        self.model = torch.load(model_path)
+        self.input_file = input_file
+        self.output_file = output_file
+        self.data = pd.read_xml(self.input_file)
+        self.root_label = 'weibos'
+        self.column_label = data.columns[1]
+        self.data_length = len(self.data[self.column_label])
+
+    def test(self):
+        data = self.data.copy()
+        encoded_data = [tokenizer.encode(sent, add_special_tokens=True, truncation=True, max_length=512) for sent in data[column_label].values]
+        MAX_LEN = max([len(sent) for sent in encoded_data])
+
+        input_ids = []
+        attention_masks = []
+        for sent in data:
+            encoded_sent = tokenizer.encode_plus(
+                text=sent,  # 预处理语句
+                add_special_tokens=True,  # 加 [CLS] 和 [SEP]
+                truncation= True,
+                max_length=MAX_LEN,  # 截断或者填充的最大长度
+                padding='max_length',  # 填充为最大长度，这里的padding在之间可以直接用pad_to_max但是版本更新之后弃用了，老版本什么都没有，可以尝试用extend方法
+                return_attention_mask=True  # 返回 attention mask
+            )
+            # 把输出加到列表里面
+            input_ids.append(encoded_sent.get('input_ids'))
+            attention_masks.append(encoded_sent.get('attention_mask'))
+
+        input_ids = torch.tensor(input_ids)
+        attention_masks = torch.tensor(attention_masks)
+
+        test_data = TensorDataset(input_ids, attention_masks)
+        test_sampler = SequentialSampler(test_data)
+        test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=batch_size)
+
+        predicts = []
+        for batch in test_dataloader:
+            b_input_ids,b_attn_mask = tuple(t.to(device) for t in batch)
+
+            with torch.no_grad():
+                logits = self.model(b_input_ids, b_attn_mask)
+            preds = (torch.argmax(logits, dim=1).flatten()).cpu().tolist()
+            predicts+=preds
+
+        predicts = predicts[:self.data_length]
+
+        return self.generate_output_file(predicts)
+
+    def generate_output_file(self,predicts):
+        assert len(predicts) == self.data_length
+
+        root = ET.Element(self.root_label)
+        tree = ET.ElementTree(root)
+        for row in data.index:
+            entry = ET.Element(self.column_label)
+            entry.set('polarity',str(predicts[row]))
+            entry.set('id', str(row+1))
+            entry.text = str(data[self.column_label][row])
+            root.append(entry)
+
+        self.__indent(root)
+        tree.write(self.output_file, encoding='utf-8', xml_declaration=True)
+
+
+    def __indent(self,elem, level=0):
+        i = "\n" + level*"\t"
+        if len(elem):
+            if not elem.text or not elem.text.strip():
+                elem.text = i + "\t"
+            if not elem.tail or not elem.tail.strip():
+                elem.tail = i
+            for elem in elem:
+                self.__indent(elem, level+1)
+            if not elem.tail or not elem.tail.strip():
+                elem.tail = i
+        else:
+            if level and (not elem.tail or not elem.tail.strip()):
+                elem.tail = i
+
+
 bert_classifier, optimizer, scheduler = initialize_model(epochs=args.epochs)
 # print("Start training and validation:\n")
 print("Start training and testing:\n")
@@ -581,8 +663,8 @@ print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for
 # test.test()
 
 
-f.close()
-sys.stdout = savedStdout
+# f.close()
+# sys.stdout = savedStdout
 
 
 # CUDA_VISIBLE_DEVICES=0 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 power 2.7
