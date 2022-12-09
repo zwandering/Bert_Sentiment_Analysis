@@ -12,7 +12,6 @@ from sklearn.model_selection import train_test_split
 from transformers import AdamW, get_linear_schedule_with_warmup
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 import xml.etree.ElementTree as ET
-from xml.etree.ElementTree import Element
 import sys
 
 parser = argparse.ArgumentParser()
@@ -41,43 +40,19 @@ sys.stdout = f
 
 
 data_worse = pd.read_xml('data/sample.negative.xml')
-# print(data_worse)
 data_worse['label'] = 0
 
-# for i,sent in enumerate(data_worse.review.values):
-#     if len(sent) > 100:
-#         data_worse.drop([i],inplace = True)
-
 data_worse_en = pd.read_xml('data/en_sample_data/sample.negative.xml')
-# print(data_worse)
 data_worse_en['label'] = 0
 
-# for i,sent in enumerate(data_worse_en.review.values):
-#     if len(sent) > 2000:
-#         data_worse_en.drop([i],inplace = True)
-# data_bad = pd.read_csv('data/2.csv')
-# data_bad['label'] = 1
-# data_normal = pd.read_csv('data/3.csv')
-# data_normal['label'] = 2
-# data_good = pd.read_csv('data/4.csv')
-# data_good['label'] = 3
 data_better = pd.read_xml('data/sample.positive.xml')
 data_better['label'] = 1
-
-# for i,sent in enumerate(data_better.review.values):
-#     if len(sent) > 100:
-#         data_better.drop([i],inplace = True)
 
 data_better_en = pd.read_xml('data/en_sample_data/sample.positive.xml')
 data_better_en['label'] = 1
 
-# for i,sent in enumerate(data_better_en.review.values):
-#     if len(sent) > 2000:
-#         data_better_en.drop([i],inplace = True)
-
 print(len(data_worse),len(data_better),len(data_worse_en),len(data_better_en))
 # 连接每个数据集作为训练集
-# data = pd.concat([data_worse[:1000], data_bad[:1000], data_normal[:1000], data_good[:1000], data_better[:1000]], axis=0).reset_index(drop=True)
 data = pd.concat([data_worse[:-1],data_worse_en[:-1], data_better[:-1], data_better_en[:-1]], axis=0).reset_index(drop=True)
 
 for i,sent in enumerate(data.review.values):
@@ -87,11 +62,8 @@ for i,sent in enumerate(data.review.values):
     if len(sent) > 1870:
         data.drop([i],inplace = True)
 
-
-    # if i>5000 and i<5050: print(data.loc[i].review)
 MAX_LEN = max([len(sent) for sent in data.review.values])
 print(MAX_LEN)
-# print(data.size)
 
 
 """
@@ -101,11 +73,8 @@ print(MAX_LEN)
 X = data.review.values  # comment
 y = data.label.values  # label自己给的0 1 2
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, shuffle=True)
-# print(len(X), len(X_train))
-# 看一下测试集的comment 和 label
-# print(X_test)
-# print(y_test)
+X_train, X_validate, y_train, y_validate = train_test_split(X, y, test_size=0.2, shuffle=True)
+
 """
 用GPU训练
 这里要注意一个大问题，要用GPU跑，我之前用的CPU跑一个batch 32 跑了5分钟，GPU才10来秒，这里torch和cuda的版本要对应才行
@@ -139,9 +108,6 @@ else:
 
 # 加载bert的tokenize方法
 tokenizer = BertTokenizer.from_pretrained(args.model)
-# tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased', do_lower_case=False)
-# tokenizer = BertTokenizer.from_pretrained('bert-base-chinese')
-
 
 # 进行token,预处理
 def preprocessing_for_bert(data):
@@ -178,20 +144,15 @@ def preprocessing_for_bert(data):
 # Encode 我们连接的数据
 encoded_comment = [tokenizer.encode(sent, add_special_tokens=True, truncation=True, max_length=512) for sent in data.review.values]
 
-# 找到最大长度
-# max_len = max([len(sent) for sent in encoded_comment])
-# print('Max length: ', max_len)  68
-
 """
 现在我们开始tokenize数据
 """
 # 文本最大长度
 MAX_LEN = max([len(sent) for sent in encoded_comment])
 print(MAX_LEN)
-# MAX_LEN = 40
 # 在train，test上运行 preprocessing_for_bert 转化为指定输入格式
 train_inputs, train_masks = preprocessing_for_bert(X_train)
-test_inputs, test_masks = preprocessing_for_bert(X_test)
+validate_inputs, validate_masks = preprocessing_for_bert(X_validate)
 
 """Create PyTorch DataLoader
 
@@ -199,10 +160,8 @@ test_inputs, test_masks = preprocessing_for_bert(X_test)
 
 """
 # 转化为tensor类型
-
 train_labels = torch.tensor(y_train)
-test_labels = torch.tensor(y_test)
-
+validate_labels = torch.tensor(y_validate)
 
 # 用于BERT微调, batch size 16 or 32较好.
 batch_size = args.batch_size
@@ -210,14 +169,12 @@ batch_size = args.batch_size
 # 给训练集创建 DataLoader
 train_data = TensorDataset(train_inputs, train_masks, train_labels)
 train_sampler = RandomSampler(train_data)
-# print(len(train_data))
 train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=batch_size, drop_last=True)
-# print(train_dataloader)
 
 # 给验证集创建 DataLoader
-test_data = TensorDataset(test_inputs, test_masks, test_labels)
-test_sampler = SequentialSampler(test_data)
-test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=batch_size)
+validate_data = TensorDataset(validate_inputs, validate_masks, validate_labels)
+validate_sampler = SequentialSampler(validate_data)
+validate_dataloader = DataLoader(validate_data, sampler=validate_sampler, batch_size=batch_size)
 
 
 """关键点来了，开始训练！
@@ -231,42 +188,6 @@ BERT base由12个transformer层组成，每个transformer层接收一系列token
 
 注意文本是512的限制，所以不能太大，我就是通过筛选排列得到的数据集
 """
-
-
-# 自己定义的Bert分类器的类，微调Bert模型
-# class BertClassifier(nn.Module):
-#     def __init__(self, ):
-#         """
-#         freeze_bert (bool): 设置是否进行微调，0就是不，1就是调
-#         """
-#         super(BertClassifier, self).__init__()
-#         # 输入维度(hidden size of Bert)默认768，分类器隐藏维度，输出维度(label)
-#         D_in, H, D_out = 768, 100, 2
-#
-#         # 实体化Bert模型
-#         self.bert = BertModel.from_pretrained(args.model)
-#         # self.bert = BertModel.from_pretrained('bert-base-multilingual-cased')
-#         # self.bert = BertModel.from_pretrained('bert-base-chinese')
-#
-#         # 实体化一个单层前馈分类器，说白了就是最后要输出的时候搞个全连接层
-#         self.classifier = nn.Sequential(
-#             nn.Linear(D_in, H),  # 全连接
-#             nn.ReLU(),  # 激活函数
-#             nn.Dropout(p=0.3),
-#             nn.Linear(H, D_out)  # 全连接
-#         )
-#
-#     def forward(self, input_ids, attention_mask):
-#         # 开始搭建整个网络了
-#         # 输入
-#         outputs = self.bert(input_ids=input_ids,
-#                             attention_mask=attention_mask)
-#         # 为分类任务提取标记[CLS]的最后隐藏状态，因为要连接传到全连接层去
-#         last_hidden_state_cls = outputs[0][:, 0, :]
-#         # 全连接，计算，输出label
-#         logits = self.classifier(last_hidden_state_cls)
-#
-#         return logits
 
 class BertClassifier(nn.Module):
     def __init__(self, ):
@@ -393,7 +314,7 @@ loss_fn = nn.CrossEntropyLoss()  # 交叉熵
 
 
 # 训练模型
-def train(model, train_dataloader, test_dataloader=None, epochs=2, evaluation=False):
+def train(model, train_dataloader, validate_dataloader=None, epochs=2, evaluation=False):
     # 开始训练循环
 
     # reinit pooler-layer
@@ -512,7 +433,7 @@ def train(model, train_dataloader, test_dataloader=None, epochs=2, evaluation=Fa
             time_elapsed = time.time() - t0_epoch
 
             print(
-                f"{epoch_i + 1:^7} | {'-':^10} | {avg_train_loss:^14.6f} | {test_loss:^12.6f} | {test_accuracy:^12.2f}% | {time_elapsed:^9.2f}")
+                f"{epoch_i + 1:^7} | {'-':^10} | {avg_train_loss:^14.6f} | {validate_loss:^12.6f} | {validate_accuracy:^12.2f}% | {time_elapsed:^9.2f}")
             print("-" * 80)
         print("\n")
 
@@ -558,13 +479,94 @@ def evaluate(model, test_dataloader):
     return val_loss, val_accuracy
 
 
+class Test():
+    def __init__(self,model_path,input_file,output_file) -> None:
+        self.model = torch.load(model_path)
+        self.input_file = input_file
+        self.output_file = output_file
+        self.data = pd.read_xml(self.input_file)
+        self.root_label = 'weibos'
+        self.column_label = data.columns[1]
+        self.data_length = len(self.data[self.column_label])
+
+    def test(self):
+        data = self.data.copy()
+        encoded_data = [tokenizer.encode(sent, add_special_tokens=True, truncation=True, max_length=512) for sent in data[column_label].values]
+        MAX_LEN = max([len(sent) for sent in encoded_data])
+
+        input_ids = []
+        attention_masks = []
+        for sent in data:
+            encoded_sent = tokenizer.encode_plus(
+                text=sent,  # 预处理语句
+                add_special_tokens=True,  # 加 [CLS] 和 [SEP]
+                truncation= True,
+                max_length=MAX_LEN,  # 截断或者填充的最大长度
+                padding='max_length',  # 填充为最大长度，这里的padding在之间可以直接用pad_to_max但是版本更新之后弃用了，老版本什么都没有，可以尝试用extend方法
+                return_attention_mask=True  # 返回 attention mask
+            )
+            # 把输出加到列表里面
+            input_ids.append(encoded_sent.get('input_ids'))
+            attention_masks.append(encoded_sent.get('attention_mask'))        
+
+        input_ids = torch.tensor(input_ids)
+        attention_masks = torch.tensor(attention_masks)
+
+        test_data = TensorDataset(input_ids, attention_masks)
+        test_sampler = SequentialSampler(test_data)
+        test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=batch_size)
+
+        predicts = []
+        for batch in test_dataloader:
+            b_input_ids,b_attn_mask = tuple(t.to(device) for t in batch)
+
+            with torch.no_grad():
+                logits = self.model(b_input_ids, b_attn_mask)
+            preds = (torch.argmax(logits, dim=1).flatten()).cpu().tolist()
+            predicts+=preds
+
+        predicts = predicts[:self.data_length]
+
+        return self.generate_output_file(predicts)
+
+    def generate_output_file(self,predicts):
+        assert len(predicts) == self.data_length
+
+        root = ET.Element(self.root_label)
+        tree = ET.ElementTree(root)
+        for row in data.index:
+            entry = ET.Element(self.column_label)
+            entry.set('polarity',str(predicts[row]))
+            entry.set('id', str(row+1))
+            entry.text = str(data[self.column_label][row])
+            root.append(entry)
+
+        self.__indent(root)
+        tree.write(self.output_file, encoding='utf-8', xml_declaration=True)        
+
+
+    def __indent(self,elem, level=0):
+        i = "\n" + level*"\t"
+        if len(elem):
+            if not elem.text or not elem.text.strip():
+                elem.text = i + "\t"
+            if not elem.tail or not elem.tail.strip():
+                elem.tail = i
+            for elem in elem:
+                self.__indent(elem, level+1)
+            if not elem.tail or not elem.tail.strip():
+                elem.tail = i
+        else:
+            if level and (not elem.tail or not elem.tail.strip()):
+                elem.tail = i
+
+
 for k,v in sorted(vars(args).items()):
     print(k,'=',v)
 
 bert_classifier, optimizer, scheduler = initialize_model(epochs=args.epochs)
-# print("Start training and validation:\n")
 print("Start training and testing:\n")
-train(bert_classifier, train_dataloader, test_dataloader, epochs=args.epochs, evaluation=True)  # 这个是有评估的
+train(bert_classifier, train_dataloader, validate_dataloader, epochs=args.epochs, evaluation=True)  # 这个是有评估的
 
 net = BertClassifier()
 print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for x in net.parameters())))
