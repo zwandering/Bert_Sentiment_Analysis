@@ -35,9 +35,9 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - %(filename)
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# savedStdout = sys.stdout
-# f = open(args.output,'w+')
-# sys.stdout = f
+savedStdout = sys.stdout
+f = open(args.output,'w+')
+sys.stdout = f
 
 
 data_worse = pd.read_xml('data/sample.negative.xml')
@@ -52,19 +52,11 @@ data_better['label'] = 1
 data_better_en = pd.read_xml('data/en_sample_data/sample.positive.xml')
 data_better_en['label'] = 1
 
-print(len(data_worse),len(data_better),len(data_worse_en),len(data_better_en))
 # 连接每个数据集作为训练集
 data = pd.concat([data_worse[:-1],data_worse_en[:-1], data_better[:-1], data_better_en[:-1]], axis=0).reset_index(drop=True)
 
-for i,sent in enumerate(data.review.values):
-    data.loc[i,'review'] = data.loc[i,'review'].replace('\n', ' ')
-
-for i,sent in enumerate(data.review.values):
-    if len(sent) > 1870:
-        data.drop([i],inplace = True)
-
-MAX_LEN = max([len(sent) for sent in data.review.values])
-print(MAX_LEN)
+# for i,sent in enumerate(data.review.values):
+#     data.loc[i,'review'] = data.loc[i,'review'].replace('\n', ' ')
 
 
 """
@@ -83,11 +75,11 @@ X_train, X_validate, y_train, y_validate = train_test_split(X, y, test_size=0.2,
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
-    print(f'There are {torch.cuda.device_count()} GPU(s) available.')
-    print('Device name:', torch.cuda.get_device_name(0))
+    print(f'There are {torch.cuda.device_count()} GPU(s) available.',flush=True)
+    print('Device name:', torch.cuda.get_device_name(0),flush=True)
 
 else:
-    print('No GPU available, using the CPU instead.')
+    print('No GPU available, using the CPU instead.',flush=True)
     device = torch.device("cpu")
 
 """BERT Tokenizer
@@ -150,7 +142,7 @@ encoded_comment = [tokenizer.encode(sent, add_special_tokens=True, truncation=Tr
 """
 # 文本最大长度
 MAX_LEN = max([len(sent) for sent in encoded_comment])
-print(MAX_LEN)
+print("Max length of the encoded data:",MAX_LEN,flush=True)
 # 在train，test上运行 preprocessing_for_bert 转化为指定输入格式
 train_inputs, train_masks = preprocessing_for_bert(X_train)
 validate_inputs, validate_masks = preprocessing_for_bert(X_validate)
@@ -213,9 +205,6 @@ class BertClassifier(nn.Module):
             nn.Dropout(p=args.dropout),  # dropot的概率可以再调调
             nn.LayerNorm(D_in), # dropout 和 Layernorm顺序需要再确定
             nn.Linear(D_in,D_out),
-            self.activation,
-            # nn.Linear(H, D_out),  # 全连接
-            # self.activation
         )
 
     def forward(self, input_ids, attention_mask):
@@ -359,8 +348,8 @@ def train(model, train_dataloader, validate_dataloader=None, epochs=2, evaluatio
         # =======================================
         # 表头
         print(
-            f"{'Epoch':^7} | {'每40个Batch':^9} | {'训练集 Loss':^12} | {'测试集 Loss':^10} | {'测试集准确率':^9} | {'时间':^9}")
-        print("-" * 80)
+            f"{'Epoch':^7} | {'每40个Batch':^9} | {'训练集 Loss':^12} | {'测试集 Loss':^10} | {'测试集准确率':^9} | {'时间':^9}",flush=True)
+        print("-" * 80,flush=True)
 
         # 测量每个epoch经过的时间
         t0_epoch, t0_batch = time.time(), time.time()
@@ -406,7 +395,7 @@ def train(model, train_dataloader, validate_dataloader=None, epochs=2, evaluatio
 
                 # Print训练结果
                 print(
-                    f"{epoch_i + 1:^7} | {step:^10} | {batch_loss / batch_counts:^14.6f} | {'-':^12} | {'-':^13} | {time_elapsed:^9.2f}")
+                    f"{epoch_i + 1:^7} | {step:^10} | {batch_loss / batch_counts:^14.6f} | {'-':^12} | {'-':^13} | {time_elapsed:^9.2f}",flush=True)
 
                 # 重置batch参数
                 batch_loss, batch_counts = 0, 0
@@ -415,14 +404,14 @@ def train(model, train_dataloader, validate_dataloader=None, epochs=2, evaluatio
         # 计算平均loss 这个是训练集的loss
         avg_train_loss = total_loss / len(train_dataloader)
 
-        print("-" * 80)
+        print("-" * 80,flush=True)
         # =======================================
         #               Evaluation
         # =======================================
         if evaluation:  # 这个evalution是我们自己给的，用来判断是否需要我们汇总评估
             # 每个epoch之后评估一下性能
             # 在我们的验证集/测试集上.
-            validate_loss, validate_accuracy = evaluate(model, test_dataloader)
+            validate_loss, validate_accuracy = evaluate(model, validate_dataloader)
 
             # 保存当前性能最好的模型
             if validate_accuracy > best_accuracy:
@@ -433,15 +422,15 @@ def train(model, train_dataloader, validate_dataloader=None, epochs=2, evaluatio
                 output_name = 'AUC'+str(validate_accuracy)+'_lr_' + str(args.lr) + '_pooling_' + str(args.pooling) + '_batch_' + str(args.batch_size)+'.pth'
                 output_path = os.path.join(output_dir, output_name)
                 torch.save(model, output_path)
-                print("Model Saved as :"+output_path)
+                print("Model Saved as :"+output_path,flush=True)
 
             # Print 整个训练集的耗时
             time_elapsed = time.time() - t0_epoch
 
             print(
-                f"{epoch_i + 1:^7} | {'-':^10} | {avg_train_loss:^14.6f} | {validate_loss:^12.6f} | {validate_accuracy:^12.2f}% | {time_elapsed:^9.2f}")
-            print("-" * 80)
-        print("\n")
+                f"{epoch_i + 1:^7} | {'-':^10} | {avg_train_loss:^14.6f} | {validate_loss:^12.6f} | {validate_accuracy:^12.2f}% | {time_elapsed:^9.2f}",flush=True)
+            print("-" * 80,flush=True)
+        print("\n",flush=True)
 
 
 # 在测试集上面来看看我们的训练效果
@@ -496,8 +485,8 @@ class Test():
         self.data_length = len(self.data[self.column_label])
 
     def test(self):
-        data = self.data.copy()
-        encoded_data = [tokenizer.encode(sent, add_special_tokens=True, truncation=True, max_length=512) for sent in data[column_label].values]
+        data = (self.data.copy())[self.column_label].values
+        encoded_data = [tokenizer.encode(sent, add_special_tokens=True, truncation=True, max_length=512) for sent in data]
         MAX_LEN = max([len(sent) for sent in encoded_data])
 
         input_ids = []
@@ -528,7 +517,8 @@ class Test():
 
             with torch.no_grad():
                 logits = self.model(b_input_ids, b_attn_mask)
-            preds = (torch.argmax(logits, dim=1).flatten()).cpu().tolist()
+            preds = (torch.argmax(logits, dim=1).flatten()).cpu().numpy()
+            preds = (preds * -2 + 1).tolist()   # 0,1调整为1，-1
             predicts+=preds
 
         predicts = predicts[:self.data_length]
@@ -540,15 +530,15 @@ class Test():
 
         root = ET.Element(self.root_label)
         tree = ET.ElementTree(root)
-        for row in data.index:
+        for row in self.data.index:
             entry = ET.Element(self.column_label)
-            entry.set('polarity',str(predicts[row]))
             entry.set('id', str(row+1))
-            entry.text = str(data[self.column_label][row])
+            entry.set('polarity',str(predicts[row]))
+            entry.text = str(self.data[self.column_label][row])
             root.append(entry)
 
         self.__indent(root)
-        tree.write(self.output_file, encoding='utf-8', xml_declaration=True)        
+        tree.write(self.output_file, encoding='utf-8', xml_declaration=False)        
 
 
     def __indent(self,elem, level=0):
@@ -566,98 +556,17 @@ class Test():
             if level and (not elem.tail or not elem.tail.strip()):
                 elem.tail = i
 
-
+print("\n\nArgs for the training:",flush=True)
 for k,v in sorted(vars(args).items()):
-    print(k,'=',v)
-
-class Test():
-    def __init__(self,model_path,input_file,output_file) -> None:
-        self.model = torch.load(model_path)
-        self.input_file = input_file
-        self.output_file = output_file
-        self.data = pd.read_xml(self.input_file)
-        self.root_label = 'weibos'
-        self.column_label = data.columns[1]
-        self.data_length = len(self.data[self.column_label])
-
-    def test(self):
-        data = self.data.copy()
-        encoded_data = [tokenizer.encode(sent, add_special_tokens=True, truncation=True, max_length=512) for sent in data[column_label].values]
-        MAX_LEN = max([len(sent) for sent in encoded_data])
-
-        input_ids = []
-        attention_masks = []
-        for sent in data:
-            encoded_sent = tokenizer.encode_plus(
-                text=sent,  # 预处理语句
-                add_special_tokens=True,  # 加 [CLS] 和 [SEP]
-                truncation= True,
-                max_length=MAX_LEN,  # 截断或者填充的最大长度
-                padding='max_length',  # 填充为最大长度，这里的padding在之间可以直接用pad_to_max但是版本更新之后弃用了，老版本什么都没有，可以尝试用extend方法
-                return_attention_mask=True  # 返回 attention mask
-            )
-            # 把输出加到列表里面
-            input_ids.append(encoded_sent.get('input_ids'))
-            attention_masks.append(encoded_sent.get('attention_mask'))
-
-        input_ids = torch.tensor(input_ids)
-        attention_masks = torch.tensor(attention_masks)
-
-        test_data = TensorDataset(input_ids, attention_masks)
-        test_sampler = SequentialSampler(test_data)
-        test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=batch_size)
-
-        predicts = []
-        for batch in test_dataloader:
-            b_input_ids,b_attn_mask = tuple(t.to(device) for t in batch)
-
-            with torch.no_grad():
-                logits = self.model(b_input_ids, b_attn_mask)
-            preds = (torch.argmax(logits, dim=1).flatten()).cpu().tolist()
-            predicts+=preds
-
-        predicts = predicts[:self.data_length]
-
-        return self.generate_output_file(predicts)
-
-    def generate_output_file(self,predicts):
-        assert len(predicts) == self.data_length
-
-        root = ET.Element(self.root_label)
-        tree = ET.ElementTree(root)
-        for row in data.index:
-            entry = ET.Element(self.column_label)
-            entry.set('polarity',str(predicts[row]))
-            entry.set('id', str(row+1))
-            entry.text = str(data[self.column_label][row])
-            root.append(entry)
-
-        self.__indent(root)
-        tree.write(self.output_file, encoding='utf-8', xml_declaration=True)
-
-
-    def __indent(self,elem, level=0):
-        i = "\n" + level*"\t"
-        if len(elem):
-            if not elem.text or not elem.text.strip():
-                elem.text = i + "\t"
-            if not elem.tail or not elem.tail.strip():
-                elem.tail = i
-            for elem in elem:
-                self.__indent(elem, level+1)
-            if not elem.tail or not elem.tail.strip():
-                elem.tail = i
-        else:
-            if level and (not elem.tail or not elem.tail.strip()):
-                elem.tail = i
-
+    print(k,'=',v,flush=True)
+print("\n",flush=True)
 
 bert_classifier, optimizer, scheduler = initialize_model(epochs=args.epochs)
-print("Start training and testing:\n")
+print("Start training and testing:\n",flush=True)
 train(bert_classifier, train_dataloader, validate_dataloader, epochs=args.epochs, evaluation=True)  # 这个是有评估的
 
 net = BertClassifier()
-print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for x in net.parameters())))
+print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for x in net.parameters())),flush=True)
 
 
 # Do testing on test dataset and generates a xml-formatted output file
@@ -665,8 +574,8 @@ print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for
 # test.test()
 
 
-# f.close()
-# sys.stdout = savedStdout
+f.close()
+sys.stdout = savedStdout
 
 
 # CUDA_VISIBLE_DEVICES=0 python sentiment.py --model 'bert-base-multilingual-cased' --batch_size 16 --lr 1e-5 --weight_decay True --reinit_layers 2 power 2.7
